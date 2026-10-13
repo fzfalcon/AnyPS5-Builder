@@ -1,0 +1,349 @@
+
+import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import "./App.css";
+
+type Platform = "Windows" | "Linux" | "macOS";
+type Channel = "Stable" | "Experimental";
+
+type ReleaseAsset = {
+  name: string;
+  size: number;
+  download_url: string;
+  sha256_digest: string | null;
+};
+
+type ReleaseInfo = {
+  version: string;
+  name: string | null;
+  release_url: string;
+  published_at: string | null;
+  notes: string | null;
+  assets: ReleaseAsset[];
+};
+
+export default function App() {
+  const [platform, setPlatform] = useState<Platform>("Windows");
+  const [channel, setChannel] = useState<Channel>("Stable");
+  const [release, setRelease] = useState<ReleaseInfo | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const [logs, setLogs] = useState<string[]>([
+    "AnyPS5 Builder initialized",
+    "Upstream: boykopovar/AnyPS5",
+    "Ready to check for updates",
+  ]);
+
+  function log(message: string) {
+    setLogs((items) => [
+      ...items,
+      `${new Date().toLocaleTimeString()} — ${message}`,
+    ]);
+  }
+
+  async function checkUpdates() {
+    if (channel === "Experimental") {
+      setError(
+        "Experimental channel is not connected yet. The current backend checks official stable releases only.",
+      );
+      log("Experimental update check unavailable");
+      return;
+    }
+
+    setChecking(true);
+    setError("");
+    log("Checking official AnyPS5 stable release…");
+
+    try {
+      const result = await invoke<ReleaseInfo>("latest_release");
+      setRelease(result);
+      log(`Official release found: ${result.version}`);
+      log(`${result.assets.length} release assets listed`);
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "Could not retrieve release information.";
+      setError(message);
+      log(`Update check failed: ${message}`);
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function downloadAsset(asset: ReleaseAsset) {
+    if (!release || downloading) return;
+
+    setDownloading(asset.name);
+    setError("");
+    log(`Starting official download: ${asset.name}`);
+
+    try {
+      const result = await invoke<{
+        name: string;
+        path: string;
+        bytes_written: number;
+        sha256: string;
+        digest_verified: boolean;
+      }>("download_release_asset", {
+        assetName: asset.name,
+        expectedVersion: release.version,
+      });
+
+      log(`Download completed: ${result.name}`);
+      log(`Saved to: ${result.path}`);
+      log(
+        result.digest_verified
+          ? `SHA-256 verified: ${result.sha256}`
+          : `SHA-256 calculated but not verified against a published digest: ${result.sha256}`,
+      );
+
+      window.alert(
+        `Download completed!\\n\\nFile: ${result.name}\\nSize: ${formatSize(result.bytes_written)}\\nSHA-256: ${result.digest_verified ? "Verified" : "Not independently verified"}\\n\\nSaved to:\\n${result.path}`,
+      );
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "The asset download failed.";
+      setError(message);
+      log(`Download failed: ${asset.name} — ${message}`);
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  function formatSize(bytes: number) {
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  const publishedDate = release?.published_at
+    ? new Date(release.published_at).toLocaleDateString()
+    : "Not provided";
+
+  return (
+    <main className="app">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-logo">A</div>
+          <div>
+            <strong>AnyPS5 Builder</strong>
+            <small>DEVELOPMENT BUILD</small>
+          </div>
+        </div>
+
+        <p className="nav-label">WORKSPACE</p>
+        <div className="nav active">▦ &nbsp; Dashboard</div>
+        <div className="nav">⇩ &nbsp; Asset Manager</div>
+        <div className="nav">▷ &nbsp; Converter</div>
+        <div className="nav">◈ &nbsp; Compatibility</div>
+
+        <div className="sidebar-status">
+          <span className="dot" /> Interface ready
+          <small>v0.1.0-dev</small>
+        </div>
+      </aside>
+
+      <section className="main">
+        <header className="topbar">
+          <span>Workspace / Dashboard</span>
+          <a
+            href="https://github.com/boykopovar/AnyPS5"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Official upstream ↗
+          </a>
+        </header>
+
+        <div className="content">
+          <div className="heading">
+            <div>
+              <p className="eyebrow">CONTROL CENTER</p>
+              <h1>AnyPS5 Builder</h1>
+              <p className="muted">
+                Manage upstream tools, platforms and conversion tasks.
+              </p>
+            </div>
+            <button
+              className="primary"
+              onClick={checkUpdates}
+              disabled={checking}
+            >
+              {checking ? "Checking…" : "↻ Check updates"}
+            </button>
+          </div>
+
+          <div className="notice">
+            <strong>ⓘ &nbsp; Live release checker</strong>
+            <p>
+              Stable update checks query the official AnyPS5 GitHub Releases
+              API. Release availability does not guarantee game compatibility.
+            </p>
+          </div>
+
+          {error && (
+            <div className="notice" role="alert">
+              <strong>Update check unavailable</strong>
+              <p>{error}</p>
+            </div>
+          )}
+
+          <div className="stats">
+            <article className="panel stat">
+              <span className="eyebrow">LATEST STABLE</span>
+              <h2>{release?.version ?? "Not checked"}</h2>
+              <p className="muted">
+                {release ? `Published ${publishedDate}` : "Check for the latest release"}
+              </p>
+              {release && (
+                <a href={release.release_url} target="_blank" rel="noreferrer">
+                  View official release ↗
+                </a>
+              )}
+            </article>
+
+            <article className="panel stat">
+              <span className="eyebrow">UPSTREAM</span>
+              <h2>{release ? "Connected" : "Not checked"}</h2>
+              <p className="muted">
+                {release
+                  ? `${release.assets.length} published assets`
+                  : "Live refresh available through the desktop backend"}
+              </p>
+            </article>
+
+            <article className="panel stat">
+              <span className="eyebrow">TARGET PLATFORM</span>
+              <h2>{platform}</h2>
+              <p className="muted">Selected target platform</p>
+            </article>
+          </div>
+
+          <div className="columns">
+            <article className="panel">
+              <p className="eyebrow">CONFIGURATION</p>
+              <h2>Build settings</h2>
+
+              <label htmlFor="platform">Target platform</label>
+              <select
+                id="platform"
+                value={platform}
+                onChange={(event) =>
+                  setPlatform(event.target.value as Platform)
+                }
+              >
+                <option>Windows</option>
+                <option>Linux</option>
+                <option>macOS</option>
+              </select>
+              <p className="hint">
+                Only use assets compatible with the selected platform. macOS
+                may require a compatible source build.
+              </p>
+
+              <label htmlFor="channel">Update channel</label>
+              <select
+                id="channel"
+                value={channel}
+                onChange={(event) =>
+                  setChannel(event.target.value as Channel)
+                }
+              >
+                <option>Stable</option>
+                <option>Experimental</option>
+              </select>
+              <p className="hint">
+                {channel === "Stable"
+                  ? "Checks published official releases."
+                  : "Experimental source/build integration is not implemented yet."}
+              </p>
+
+              <button
+                className="primary full"
+                onClick={() => log(`Selected ${platform} / ${channel}`)}
+              >
+                Apply settings →
+              </button>
+            </article>
+
+            <article className="panel">
+              <div className="log-heading">
+                <div>
+                  <p className="eyebrow">DIAGNOSTICS</p>
+                  <h2>Activity log</h2>
+                </div>
+                <button className="text-button" onClick={() => setLogs([])}>
+                  Clear
+                </button>
+              </div>
+
+              <div className="logs">
+                {logs.length ? (
+                  logs.map((item, index) => (
+                    <div className="log-row" key={`${item}-${index}`}>
+                      <span className="log-dot" />
+                      <span>{item}</span>
+                    </div>
+                  ))
+                ) : (
+                  <p className="muted">No log entries.</p>
+                )}
+              </div>
+            </article>
+          </div>
+
+          {release && (
+            <article className="panel release-panel">
+              <p className="eyebrow">OFFICIAL RELEASE ASSETS</p>
+              <h2>{release.name || release.version}</h2>
+              <p className="muted">
+                These files are listed by the official upstream release.
+                Downloads have not been started by this screen.
+              </p>
+
+              {release.assets.length === 0 ? (
+                <p className="muted">No downloadable assets were published.</p>
+              ) : (
+                <div className="asset-list">
+                  {release.assets.map((asset) => (
+                    <div className="asset-row" key={asset.name}>
+                      <div>
+                        <strong>{asset.name}</strong>
+                        <p className="hint">
+                          {formatSize(asset.size)}
+                          {asset.sha256_digest
+                            ? ` · ${asset.sha256_digest}`
+                            : " · No published digest"}
+                        </p>
+                      </div>
+                      <button
+                        className="primary"
+                        onClick={() => downloadAsset(asset)}
+                        disabled={downloading !== null}
+                      >
+                        {downloading === asset.name ? "Downloading…" : "Download"}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {release.notes && (
+                <details>
+                  <summary>Release notes</summary>
+                  <pre className="release-notes">{release.notes}</pre>
+                </details>
+              )}
+            </article>
+          )}
+
+          <footer>
+            <span>ANYPS5 BUILDER · COMMUNITY PROJECT</span>
+            <span>Independent project · Not affiliated with PlayStation</span>
+          </footer>
+        </div>
+      </section>
+    </main>
+  );
+}
