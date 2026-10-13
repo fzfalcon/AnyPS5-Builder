@@ -397,6 +397,7 @@ export default function App() {
                   {compatibilityLoading ? "Loading…" : "↻ Refresh data"}
                 </button>
               </div>
+              <article className="panel" style={{ marginBottom: "16px" }}><p className="eyebrow">COMMUNITY PROJECT</p><h2>Live Compatibility Roadmap</h2><p className="muted">Explore per-game development stages, open blockers, library progress, and GPU coverage. Development progress does not guarantee a game is playable.</p><p><a href="https://alxcbtw.github.io/anyps5-roadmap/" target="_blank" rel="noreferrer">Open Live Roadmap ↗</a></p><p><a href="https://github.com/AlxcBTW/anyps5-roadmap" target="_blank" rel="noreferrer">View roadmap source on GitHub ↗</a></p></article><article className="panel" style={{ marginBottom: "16px" }}><p className="eyebrow">COMMUNITY TEST REPORTS</p><h2>Game Bring-up Discussions</h2><p className="muted">Read community test reports and investigate individual game titles.</p><p><a href="https://github.com/boykopovar/AnyPS5/discussions/categories/game-bring-up" target="_blank" rel="noreferrer">Open Game Bring-up Discussions ↗</a></p></article>
               {compatibilityError && <div className="notice" role="alert"><strong>Could not load compatibility data</strong><p>{compatibilityError}</p></div>}
               <article className="panel">
                 <h2>Official compatibility document</h2>
