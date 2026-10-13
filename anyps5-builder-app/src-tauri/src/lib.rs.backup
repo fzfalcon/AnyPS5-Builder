@@ -1,0 +1,100 @@
+use serde::{Deserialize, Serialize};
+
+const RELEASES_URL: &str =
+    "https://api.github.com/repos/boykopovar/AnyPS5/releases/latest";
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubAsset {
+    name: String,
+    size: u64,
+    browser_download_url: String,
+    #[serde(default)]
+    digest: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    name: Option<String>,
+    html_url: String,
+    published_at: Option<String>,
+    body: Option<String>,
+    draft: bool,
+    prerelease: bool,
+    assets: Vec<GitHubAsset>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReleaseAsset {
+    name: String,
+    size: u64,
+    download_url: String,
+    sha256_digest: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReleaseInfo {
+    version: String,
+    name: Option<String>,
+    release_url: String,
+    published_at: Option<String>,
+    notes: Option<String>,
+    assets: Vec<ReleaseAsset>,
+}
+
+#[tauri::command]
+fn latest_release() -> Result<ReleaseInfo, String> {
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("AnyPS5-Builder")
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("Could not create HTTP client: {e}"))?;
+
+    let response = client
+        .get(RELEASES_URL)
+        .header("Accept", "application/vnd.github+json")
+        .send()
+        .map_err(|e| format!("Could not contact GitHub: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("GitHub release request failed: {e}"))?;
+
+    let release: GitHubRelease = response
+        .json()
+        .map_err(|e| format!("Could not parse GitHub release data: {e}"))?;
+
+    if release.draft || release.prerelease {
+        return Err("GitHub returned a draft or prerelease instead of a stable release.".into());
+    }
+
+    Ok(ReleaseInfo {
+        version: release.tag_name,
+        name: release.name,
+        release_url: release.html_url,
+        published_at: release.published_at,
+        notes: release.body,
+        assets: release
+            .assets
+            .into_iter()
+            .map(|asset| ReleaseAsset {
+                name: asset.name,
+                size: asset.size,
+                download_url: asset.browser_download_url,
+                sha256_digest: asset.digest,
+            })
+            .collect(),
+    })
+}
+
+#[tauri::command]
+fn greet(name: &str) -> String {
+    format!("Hello, {}! You've been greeted from Rust!", name)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![greet, latest_release])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
