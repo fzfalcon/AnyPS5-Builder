@@ -77,7 +77,7 @@ export default function App() {
     };
   }, []);
 
-  const [activeView, setActiveView] = useState<"Dashboard" | "Asset Manager">("Dashboard");
+  const [activeView, setActiveView] = useState<"Dashboard" | "Asset Manager" | "Converter" | "Compatibility">("Dashboard");
   const [localAssets, setLocalAssets] = useState<LocalAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [assetsError, setAssetsError] = useState("");
@@ -276,8 +276,18 @@ export default function App() {
         >
           ⇩ &nbsp; Asset Manager
         </button>
-        <div className="nav">▷ &nbsp; Converter</div>
-        <div className="nav">◈ &nbsp; Compatibility</div>
+        <button
+          className={`nav ${activeView === "Converter" ? "active" : ""}`}
+          onClick={() => setActiveView("Converter")}
+        >
+          ▷ &nbsp; Converter
+        </button>
+        <button
+          className={`nav ${activeView === "Compatibility" ? "active" : ""}`}
+          onClick={() => setActiveView("Compatibility")}
+        >
+          ◈ &nbsp; Compatibility
+        </button>
 
         <div className="sidebar-status">
           <span className="dot" /> Interface ready
@@ -350,6 +360,16 @@ export default function App() {
                   </div>
                 )}
               </article>
+            </>
+          ) : activeView === "Converter" ? (
+            <>
+              <div className="heading"><div><p className="eyebrow">CONVERSION WORKSPACE</p><h1>Converter</h1><p className="muted">Local asset workspace.</p></div></div>
+              <article className="panel"><h2>Local assets</h2><p>{localAssets.length} asset(s) detected.</p>{localAssets.map((asset) => <p key={asset.name}>{asset.name}</p>)}<p className="muted">Conversion is not implemented yet.</p></article>
+            </>
+          ) : activeView === "Compatibility" ? (
+            <>
+              <div className="heading"><div><p className="eyebrow">RELEASE DOCUMENTATION</p><h1>Compatibility</h1><p className="muted">Local compatibility document status.</p></div></div>
+              <article className="panel"><h2>Compatibility data</h2><p>{localAssets.some((asset) => asset.name.toLowerCase() === "compatibility.md") ? "COMPATIBILITY.md is present; parsing is not implemented yet." : "COMPATIBILITY.md is not listed in local assets."}</p></article>
             </>
           ) : (
           <>
