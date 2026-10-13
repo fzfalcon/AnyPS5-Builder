@@ -81,6 +81,9 @@ export default function App() {
   const [localAssets, setLocalAssets] = useState<LocalAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
   const [assetsError, setAssetsError] = useState("");
+  const [compatibilityMarkdown, setCompatibilityMarkdown] = useState("");
+  const [compatibilityLoading, setCompatibilityLoading] = useState(false);
+  const [compatibilityError, setCompatibilityError] = useState("");
 
   const [logs, setLogs] = useState<string[]>([
     "AnyPS5 Builder initialized",
@@ -238,6 +241,22 @@ export default function App() {
     }
   }
 
+  async function loadCompatibility() {
+    setCompatibilityLoading(true);
+    setCompatibilityError("");
+    try {
+      const markdown = await invoke<string>("fetch_compatibility_markdown");
+      setCompatibilityMarkdown(markdown);
+      log("Official compatibility document loaded");
+    } catch (err) {
+      const message = typeof err === "string" ? err : "Could not load official compatibility data.";
+      setCompatibilityError(message);
+      log("Compatibility load failed: " + message);
+    } finally {
+      setCompatibilityLoading(false);
+    }
+  }
+
   function formatSize(bytes: number) {
     if (bytes < 1024 * 1024) {
       return `${(bytes / 1024).toFixed(1)} KB`;
@@ -368,8 +387,23 @@ export default function App() {
             </>
           ) : activeView === "Compatibility" ? (
             <>
-              <div className="heading"><div><p className="eyebrow">RELEASE DOCUMENTATION</p><h1>Compatibility</h1><p className="muted">Local compatibility document status.</p></div></div>
-              <article className="panel"><h2>Compatibility data</h2><p>{localAssets.some((asset) => asset.name.toLowerCase() === "compatibility.md") ? "COMPATIBILITY.md is present; parsing is not implemented yet." : "COMPATIBILITY.md is not listed in local assets."}</p></article>
+              <div className="heading">
+                <div>
+                  <p className="eyebrow">OFFICIAL UPSTREAM DATA</p>
+                  <h1>Compatibility</h1>
+                  <p className="muted">Compatibility information fetched from the official AnyPS5 repository.</p>
+                </div>
+                <button className="primary" onClick={() => void loadCompatibility()} disabled={compatibilityLoading}>
+                  {compatibilityLoading ? "Loading…" : "↻ Refresh data"}
+                </button>
+              </div>
+              {compatibilityError && <div className="notice" role="alert"><strong>Could not load compatibility data</strong><p>{compatibilityError}</p></div>}
+              <article className="panel">
+                <h2>Official compatibility document</h2>
+                {!compatibilityMarkdown && !compatibilityLoading && <p className="muted">Click Refresh data to retrieve the latest document.</p>}
+                {compatibilityLoading && <p className="muted">Fetching official Markdown…</p>}
+                {compatibilityMarkdown && <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxHeight: "60vh", overflowY: "auto" }}>{compatibilityMarkdown}</pre>}
+              </article>
             </>
           ) : (
           <>

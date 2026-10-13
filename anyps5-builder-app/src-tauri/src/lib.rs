@@ -534,6 +534,28 @@ fn list_downloaded_assets(app: tauri::AppHandle) -> Result<Vec<LocalAsset>, Stri
 }
 
 #[tauri::command]
+fn fetch_compatibility_markdown() -> Result<String, String> {
+    const URL: &str = "https://raw.githubusercontent.com/boykopovar/AnyPS5/main/docs/user/COMPATIBILITY.md";
+
+    let client = reqwest::blocking::Client::builder()
+        .user_agent("AnyPS5-Builder")
+        .timeout(Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("Could not create HTTP client: {e}"))?;
+
+    let response = client
+        .get(URL)
+        .send()
+        .map_err(|e| format!("Could not fetch official compatibility data: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Official compatibility request failed: {e}"))?;
+
+    response
+        .text()
+        .map_err(|e| format!("Could not read compatibility document: {e}"))
+}
+
+#[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
@@ -550,7 +572,8 @@ pub fn run() {
             latest_release,
             download_release_asset,
             cancel_download,
-            list_downloaded_assets
+            list_downloaded_assets,
+            fetch_compatibility_markdown
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
