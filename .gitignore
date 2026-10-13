@@ -1,0 +1,15 @@
+# Build output
+build/
+dist/
+target/
+node_modules/
+.env
+.DS_Store
+*.log
+
+# Local downloaded release assets
+downloads/
+AnyPS5-Builder-starter.zip
+
+# Temporary downloads
+*.part
