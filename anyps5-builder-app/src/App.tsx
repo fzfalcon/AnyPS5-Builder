@@ -13,6 +13,14 @@ type ReleaseAsset = {
   sha256_digest: string | null;
 };
 
+type LocalAsset = {
+  name: string;
+  version: string;
+  path: string;
+  size: number;
+  modified_at: string | null;
+};
+
 type ReleaseInfo = {
   version: string;
   name: string | null;
@@ -29,6 +37,11 @@ export default function App() {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [activeView, setActiveView] = useState<"Dashboard" | "Asset Manager">("Dashboard");
+  const [localAssets, setLocalAssets] = useState<LocalAsset[]>([]);
+  const [assetsLoading, setAssetsLoading] = useState(false);
+  const [assetsError, setAssetsError] = useState("");
+
   const [logs, setLogs] = useState<string[]>([
     "AnyPS5 Builder initialized",
     "Upstream: boykopovar/AnyPS5",
@@ -110,6 +123,24 @@ export default function App() {
     }
   }
 
+  async function refreshLocalAssets() {
+    setAssetsLoading(true);
+    setAssetsError("");
+
+    try {
+      const result = await invoke<LocalAsset[]>("list_downloaded_assets");
+      setLocalAssets(result);
+      log(`Asset Manager refreshed: ${result.length} file(s) found`);
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "Could not list downloaded assets.";
+      setAssetsError(message);
+      log(`Asset Manager refresh failed: ${message}`);
+    } finally {
+      setAssetsLoading(false);
+    }
+  }
+
   function formatSize(bytes: number) {
     if (bytes < 1024 * 1024) {
       return `${(bytes / 1024).toFixed(1)} KB`;
@@ -133,8 +164,21 @@ export default function App() {
         </div>
 
         <p className="nav-label">WORKSPACE</p>
-        <div className="nav active">▦ &nbsp; Dashboard</div>
-        <div className="nav">⇩ &nbsp; Asset Manager</div>
+        <button
+          className={`nav ${activeView === "Dashboard" ? "active" : ""}`}
+          onClick={() => setActiveView("Dashboard")}
+        >
+          ▦ &nbsp; Dashboard
+        </button>
+        <button
+          className={`nav ${activeView === "Asset Manager" ? "active" : ""}`}
+          onClick={() => {
+            setActiveView("Asset Manager");
+            void refreshLocalAssets();
+          }}
+        >
+          ⇩ &nbsp; Asset Manager
+        </button>
         <div className="nav">▷ &nbsp; Converter</div>
         <div className="nav">◈ &nbsp; Compatibility</div>
 
@@ -157,6 +201,61 @@ export default function App() {
         </header>
 
         <div className="content">
+          {activeView === "Asset Manager" ? (
+            <>
+              <div className="heading">
+                <div>
+                  <p className="eyebrow">LOCAL LIBRARY</p>
+                  <h1>Asset Manager</h1>
+                  <p className="muted">
+                    Manage files downloaded through the official release checker.
+                  </p>
+                </div>
+                <button
+                  className="primary"
+                  onClick={() => void refreshLocalAssets()}
+                  disabled={assetsLoading}
+                >
+                  {assetsLoading ? "Refreshing…" : "↻ Refresh assets"}
+                </button>
+              </div>
+
+              {assetsError && (
+                <div className="notice" role="alert">
+                  <strong>Could not load assets</strong>
+                  <p>{assetsError}</p>
+                </div>
+              )}
+
+              <article className="panel release-panel">
+                <p className="eyebrow">DOWNLOADED FILES</p>
+                <h2>{localAssets.length} asset(s)</h2>
+                {assetsLoading ? (
+                  <p className="muted">Scanning the application download directory…</p>
+                ) : localAssets.length === 0 ? (
+                  <p className="muted">
+                    No downloaded assets found. Download an official release asset first,
+                    then refresh this screen.
+                  </p>
+                ) : (
+                  <div className="asset-list">
+                    {localAssets.map((asset) => (
+                      <div className="asset-row" key={`${asset.version}-${asset.name}`}>
+                        <div>
+                          <strong>{asset.name}</strong>
+                          <p className="hint">
+                            Version {asset.version} · {formatSize(asset.size)}
+                          </p>
+                          <p className="hint">{asset.path}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </article>
+            </>
+          ) : (
+          <>
           <div className="heading">
             <div>
               <p className="eyebrow">CONTROL CENTER</p>
@@ -336,6 +435,9 @@ export default function App() {
                 </details>
               )}
             </article>
+          )}
+
+          </>
           )}
 
           <footer>

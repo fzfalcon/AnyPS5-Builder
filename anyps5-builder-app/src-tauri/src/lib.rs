@@ -288,6 +288,96 @@ fn download_release_asset(
     })
 }
 
+
+#[derive(Debug, Serialize)]
+struct LocalAsset {
+    name: String,
+    version: String,
+    path: String,
+    size: u64,
+    modified_at: Option<String>,
+}
+
+#[tauri::command]
+fn list_downloaded_assets(app: tauri::AppHandle) -> Result<Vec<LocalAsset>, String> {
+    let base_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Could not locate application data directory: {e}"))?;
+
+    let downloads_dir = base_dir.join("downloads");
+
+    if !downloads_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut assets = Vec::new();
+
+    let versions = fs::read_dir(&downloads_dir)
+        .map_err(|e| format!("Could not read downloads directory: {e}"))?;
+
+    for version_entry in versions {
+        let version_entry = version_entry
+            .map_err(|e| format!("Could not read release directory: {e}"))?;
+
+        let version_path = version_entry.path();
+
+        if !version_path.is_dir() {
+            continue;
+        }
+
+        let version = match version_path.file_name().and_then(|n| n.to_str()) {
+            Some(value) => value.to_owned(),
+            None => continue,
+        };
+
+        let files = fs::read_dir(&version_path)
+            .map_err(|e| format!("Could not read release directory: {e}"))?;
+
+        for file_entry in files {
+            let file_entry = file_entry
+                .map_err(|e| format!("Could not read downloaded file: {e}"))?;
+
+            let path = file_entry.path();
+
+            // Ignore temporary or incomplete downloads.
+            if !path.is_file()
+                || path.extension().and_then(|ext| ext.to_str()) == Some("part")
+            {
+                continue;
+            }
+
+            let metadata = fs::metadata(&path)
+                .map_err(|e| format!("Could not inspect downloaded file: {e}"))?;
+
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(value) => value.to_owned(),
+                None => continue,
+            };
+
+            let modified_at = metadata
+                .modified()
+                .ok()
+                .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|duration| duration.as_secs().to_string());
+
+            assets.push(LocalAsset {
+                name,
+                version: version.clone(),
+                path: path.display().to_string(),
+                size: metadata.len(),
+                modified_at,
+            });
+        }
+    }
+
+    assets.sort_by(|a, b| {
+        b.version.cmp(&a.version).then_with(|| a.name.cmp(&b.name))
+    });
+
+    Ok(assets)
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -300,7 +390,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             latest_release,
-            download_release_asset
+            download_release_asset,
+            list_downloaded_assets
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
