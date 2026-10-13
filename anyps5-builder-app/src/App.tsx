@@ -1,6 +1,8 @@
 
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect, useRef } from "react";
 import "./App.css";
 
 type Platform = "Windows" | "Linux" | "macOS";
@@ -11,6 +13,13 @@ type ReleaseAsset = {
   size: number;
   download_url: string;
   sha256_digest: string | null;
+};
+
+type DownloadProgress = {
+  asset_name: string;
+  received: number;
+  total: number;
+  percent: number;
 };
 
 type LocalAsset = {
@@ -37,6 +46,33 @@ export default function App() {
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState<string | null>(null);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
+  const cancelRequestedRef = useRef(false);
+  const activeDownloadRef = useRef(false);
+
+  useEffect(() => {
+    let unlisten: UnlistenFn | undefined;
+    let disposed = false;
+
+    listen<DownloadProgress>("download-progress", (event) => {
+      setDownloadProgress(event.payload);
+    }).then((stopListening) => {
+      if (disposed) {
+        stopListening();
+      } else {
+        unlisten = stopListening;
+      }
+    }).catch((err) => {
+      console.error("Could not subscribe to download progress:", err);
+    });
+
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   const [activeView, setActiveView] = useState<"Dashboard" | "Asset Manager">("Dashboard");
   const [localAssets, setLocalAssets] = useState<LocalAsset[]>([]);
   const [assetsLoading, setAssetsLoading] = useState(false);
@@ -84,8 +120,17 @@ export default function App() {
   }
 
   async function downloadAsset(asset: ReleaseAsset) {
-    if (!release || downloading) return;
+    if (!release || activeDownloadRef.current) return;
 
+    activeDownloadRef.current = true;
+    cancelRequestedRef.current = false;
+    setCancelRequested(false);
+    setDownloadProgress({
+      asset_name: asset.name,
+      received: 0,
+      total: asset.size,
+      percent: 0,
+    });
     setDownloading(asset.name);
     setError("");
     log(`Starting official download: ${asset.name}`);
@@ -102,6 +147,16 @@ export default function App() {
         expectedVersion: release.version,
       });
 
+      if (cancelRequestedRef.current) {
+        log(`Download cancelled: ${asset.name}`);
+        return;
+      }
+
+      setDownloadProgress((current) =>
+        current && current.asset_name === asset.name
+          ? { ...current, received: result.bytes_written, percent: 100 }
+          : current,
+      );
       log(`Download completed: ${result.name}`);
       log(`Saved to: ${result.path}`);
       log(
@@ -116,10 +171,37 @@ export default function App() {
     } catch (err) {
       const message =
         typeof err === "string" ? err : "The asset download failed.";
-      setError(message);
-      log(`Download failed: ${asset.name} — ${message}`);
+
+      if (cancelRequestedRef.current) {
+        log(`Download cancelled: ${asset.name}`);
+      } else {
+        setError(message);
+        log(`Download failed: ${asset.name} — ${message}`);
+      }
     } finally {
+      activeDownloadRef.current = false;
+      cancelRequestedRef.current = false;
+      setCancelRequested(false);
       setDownloading(null);
+    }
+  }
+
+  async function cancelActiveDownload() {
+    if (!activeDownloadRef.current || cancelRequestedRef.current) return;
+
+    cancelRequestedRef.current = true;
+    setCancelRequested(true);
+    log("Cancellation requested…");
+
+    try {
+      await invoke("cancel_download");
+    } catch (err) {
+      const message =
+        typeof err === "string" ? err : "Could not request cancellation.";
+      setError(message);
+      log(`Cancellation request failed: ${message}`);
+      cancelRequestedRef.current = false;
+      setCancelRequested(false);
     }
   }
 
@@ -397,9 +479,34 @@ export default function App() {
               <p className="eyebrow">OFFICIAL RELEASE ASSETS</p>
               <h2>{release.name || release.version}</h2>
               <p className="muted">
-                These files are listed by the official upstream release.
-                Downloads have not been started by this screen.
+                Files are obtained from the official upstream release and verified by the desktop backend.
               </p>
+
+              {downloading && downloadProgress?.asset_name === downloading && (
+                <div className="notice" aria-live="polite">
+                  <strong>
+                    {cancelRequested ? "Cancelling download…" : `Downloading ${downloading}`}
+                  </strong>
+                  <p>
+                    {formatSize(downloadProgress.received)} of{" "}
+                    {formatSize(downloadProgress.total)} ·{" "}
+                    {Math.round(downloadProgress.percent)}%
+                  </p>
+                  <progress
+                    max={100}
+                    value={downloadProgress.percent}
+                    style={{ width: "100%" }}
+                    aria-label="Download progress"
+                  />
+                  <button
+                    className="text-button"
+                    onClick={() => void cancelActiveDownload()}
+                    disabled={cancelRequested}
+                  >
+                    {cancelRequested ? "Cancelling…" : "Cancel download"}
+                  </button>
+                </div>
+              )}
 
               {release.assets.length === 0 ? (
                 <p className="muted">No downloadable assets were published.</p>

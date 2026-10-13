@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
+use tauri::{Emitter, Manager, State};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, OpenOptions},
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 const RELEASES_URL: &str =
@@ -48,6 +49,18 @@ struct ReleaseInfo {
     published_at: Option<String>,
     notes: Option<String>,
     assets: Vec<ReleaseAsset>,
+}
+
+struct DownloadControl {
+    cancelled: AtomicBool,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct DownloadProgress {
+    asset_name: String,
+    received: u64,
+    total: u64,
+    percent: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -107,7 +120,9 @@ fn download_release_asset(
     asset_name: String,
     expected_version: String,
     app: tauri::AppHandle,
+    control: State<'_, DownloadControl>,
 ) -> Result<DownloadResult, String> {
+    control.cancelled.store(false, Ordering::SeqCst);
     // Validate the filename before using it as a path component.
     if asset_name.is_empty()
         || asset_name == "."
@@ -213,10 +228,25 @@ fn download_release_asset(
 
     let mut hasher = Sha256::new();
     let mut total: u64 = 0;
+    let expected_size = asset.size;
     let mut buffer = [0u8; 64 * 1024];
+
+    let _ = app.emit(
+        "download-progress",
+        DownloadProgress {
+            asset_name: asset_name.clone(),
+            received: 0,
+            total: expected_size,
+            percent: 0.0,
+        },
+    );
 
     let download_result: Result<(), String> = (|| {
         loop {
+            if control.cancelled.load(Ordering::SeqCst) {
+                return Err("Download cancelled by user.".into());
+            }
+
             let count = response
                 .read(&mut buffer)
                 .map_err(|e| format!("Download interrupted: {e}"))?;
@@ -225,11 +255,15 @@ fn download_release_asset(
                 break;
             }
 
+            if control.cancelled.load(Ordering::SeqCst) {
+                return Err("Download cancelled by user.".into());
+            }
+
             total = total
                 .checked_add(count as u64)
                 .ok_or_else(|| "Downloaded size overflow.".to_string())?;
 
-            if total > asset.size {
+            if total > expected_size {
                 return Err("Downloaded data exceeds the published asset size.".into());
             }
 
@@ -237,15 +271,35 @@ fn download_release_asset(
                 .map_err(|e| format!("Could not write downloaded data: {e}"))?;
 
             hasher.update(&buffer[..count]);
+
+            let percent = if expected_size == 0 {
+                100.0
+            } else {
+                (total as f64 / expected_size as f64 * 100.0).min(100.0)
+            };
+
+            let _ = app.emit(
+                "download-progress",
+                DownloadProgress {
+                    asset_name: asset_name.clone(),
+                    received: total,
+                    total: expected_size,
+                    percent,
+                },
+            );
+        }
+
+        if control.cancelled.load(Ordering::SeqCst) {
+            return Err("Download cancelled by user.".into());
         }
 
         file.flush()
             .map_err(|e| format!("Could not flush downloaded data: {e}"))?;
 
-        if total != asset.size {
+        if total != expected_size {
             return Err(format!(
                 "Incomplete download: expected {} bytes, received {}.",
-                asset.size, total
+                expected_size, total
             ));
         }
 
@@ -288,6 +342,12 @@ fn download_release_asset(
     })
 }
 
+
+#[tauri::command]
+fn cancel_download(control: State<'_, DownloadControl>) -> Result<(), String> {
+    control.cancelled.store(true, Ordering::SeqCst);
+    Ok(())
+}
 
 #[derive(Debug, Serialize)]
 struct LocalAsset {
@@ -386,11 +446,15 @@ fn greet(name: &str) -> String {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(DownloadControl {
+            cancelled: AtomicBool::new(false),
+        })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             greet,
             latest_release,
             download_release_asset,
+            cancel_download,
             list_downloaded_assets
         ])
         .run(tauri::generate_context!())
