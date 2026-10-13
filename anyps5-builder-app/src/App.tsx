@@ -242,40 +242,12 @@ export default function App() {
   }
 
   async function loadCompatibility() {
-    setCompatibilityLoading(true);
-    setCompatibilityError("");
-    try {
-      let markdown: string;
-
-      if ("__TAURI_INTERNALS__" in window) {
-        markdown = await invoke<string>("fetch_compatibility_markdown");
-      } else {
-        const response = await fetch(
-          "https://raw.githubusercontent.com/boykopovar/AnyPS5/main/docs/user/COMPATIBILITY.md",
-          { headers: { Accept: "text/plain" } }
-        );
-
-        if (!response.ok) {
-          throw new Error(`Compatibility request failed: HTTP ${response.status}`);
-        }
-
-        markdown = await response.text();
-      }
-
-      setCompatibilityMarkdown(markdown);
-      log("Official compatibility document loaded");
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : typeof err === "string"
-            ? err
-            : "Could not load official compatibility data. The browser may block the request.";
-      setCompatibilityError(message);
-      log("Compatibility load failed: " + message);
-    } finally {
-      setCompatibilityLoading(false);
-    }
+    setCompatibilityLoading(false);
+    setCompatibilityError(
+      "The official compatibility document is no longer available at its previous URL. Use the Live Compatibility Roadmap and Game Bring-up Discussions above for current community information."
+    );
+    setCompatibilityMarkdown("");
+    log("Official compatibility document unavailable; community links remain available");
   }
 
   function formatSize(bytes: number) {
