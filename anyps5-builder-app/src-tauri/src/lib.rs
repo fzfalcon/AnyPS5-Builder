@@ -6,7 +6,7 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     time::Duration,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
 };
 
 const RELEASES_URL: &str =
@@ -51,12 +51,36 @@ struct ReleaseInfo {
     assets: Vec<ReleaseAsset>,
 }
 
+struct ActiveDownload {
+    id: String,
+    cancelled: Arc<AtomicBool>,
+    cancellable: bool,
+}
+
 struct DownloadControl {
-    cancelled: AtomicBool,
+    active: Mutex<Option<ActiveDownload>>,
+}
+
+struct DownloadGuard<'a> {
+    control: &'a DownloadControl,
+    id: String,
+}
+
+impl Drop for DownloadGuard<'_> {
+    fn drop(&mut self) {
+        let mut active = self.control.active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        if active.as_ref().is_some_and(|item| item.id == self.id) {
+            *active = None;
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Clone)]
 struct DownloadProgress {
+    download_id: String,
     asset_name: String,
     received: u64,
     total: u64,
@@ -117,12 +141,12 @@ fn latest_release() -> Result<ReleaseInfo, String> {
 
 #[tauri::command]
 fn download_release_asset(
+    download_id: String,
     asset_name: String,
     expected_version: String,
     app: tauri::AppHandle,
     control: State<'_, DownloadControl>,
 ) -> Result<DownloadResult, String> {
-    control.cancelled.store(false, Ordering::SeqCst);
     // Validate the filename before using it as a path component.
     if asset_name.is_empty()
         || asset_name == "."
@@ -142,6 +166,35 @@ fn download_release_asset(
     {
         return Err("Invalid release version.".into());
     }
+
+    if download_id.is_empty()
+        || download_id.len() > 128
+        || download_id.chars().any(char::is_control)
+    {
+        return Err("Invalid download ID.".into());
+    }
+
+    let cancelled = Arc::new(AtomicBool::new(false));
+    {
+        let mut active = control.active
+            .lock()
+            .map_err(|_| "Download control lock is unavailable.".to_string())?;
+
+        if active.is_some() {
+            return Err("Another download is already active.".into());
+        }
+
+        *active = Some(ActiveDownload {
+            id: download_id.clone(),
+            cancelled: Arc::clone(&cancelled),
+            cancellable: true,
+        });
+    }
+
+    let _download_guard = DownloadGuard {
+        control: control.inner(),
+        id: download_id.clone(),
+    };
 
     let client = reqwest::blocking::Client::builder()
         .user_agent("AnyPS5-Builder")
@@ -234,6 +287,7 @@ fn download_release_asset(
     let _ = app.emit(
         "download-progress",
         DownloadProgress {
+            download_id: download_id.clone(),
             asset_name: asset_name.clone(),
             received: 0,
             total: expected_size,
@@ -243,7 +297,7 @@ fn download_release_asset(
 
     let download_result: Result<(), String> = (|| {
         loop {
-            if control.cancelled.load(Ordering::SeqCst) {
+            if cancelled.load(Ordering::SeqCst) {
                 return Err("Download cancelled by user.".into());
             }
 
@@ -255,7 +309,7 @@ fn download_release_asset(
                 break;
             }
 
-            if control.cancelled.load(Ordering::SeqCst) {
+            if cancelled.load(Ordering::SeqCst) {
                 return Err("Download cancelled by user.".into());
             }
 
@@ -281,6 +335,7 @@ fn download_release_asset(
             let _ = app.emit(
                 "download-progress",
                 DownloadProgress {
+                    download_id: download_id.clone(),
                     asset_name: asset_name.clone(),
                     received: total,
                     total: expected_size,
@@ -289,7 +344,7 @@ fn download_release_asset(
             );
         }
 
-        if control.cancelled.load(Ordering::SeqCst) {
+        if cancelled.load(Ordering::SeqCst) {
             return Err("Download cancelled by user.".into());
         }
 
@@ -314,13 +369,36 @@ fn download_release_asset(
 
     drop(file);
 
+    // Close the cancellation window before verification and finalization.
+    // Cancellation requests arriving after this point are rejected.
+    {
+        let mut active = control.active
+            .lock()
+            .map_err(|_| "Download control lock is unavailable.".to_string())?;
+
+        let current = active.as_mut()
+            .filter(|item| item.id == download_id)
+            .ok_or_else(|| "The active download was replaced unexpectedly.".to_string())?;
+
+        current.cancellable = false;
+    }
+
+    if cancelled.load(Ordering::SeqCst) {
+        let _ = fs::remove_file(&part_path);
+        return Err("Download cancelled by user.".into());
+    }
+
     let digest = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect::<String>();
     let mut digest_verified = false;
 
     if let Some(expected_digest) = asset.digest.as_deref() {
-        let expected = expected_digest
-            .strip_prefix("sha256:")
-            .ok_or_else(|| "Unsupported published digest format.".to_string())?;
+        let expected = match expected_digest.strip_prefix("sha256:") {
+            Some(value) => value,
+            None => {
+                let _ = fs::remove_file(&part_path);
+                return Err("Unsupported published digest format.".into());
+            }
+        };
 
         if !expected.eq_ignore_ascii_case(&digest) {
             let _ = fs::remove_file(&part_path);
@@ -330,8 +408,10 @@ fn download_release_asset(
         digest_verified = true;
     }
 
-    fs::rename(&part_path, &final_path)
-        .map_err(|e| format!("Could not finalize downloaded file: {e}"))?;
+    if let Err(error) = fs::rename(&part_path, &final_path) {
+        let _ = fs::remove_file(&part_path);
+        return Err(format!("Could not finalize downloaded file: {error}"));
+    }
 
     Ok(DownloadResult {
         name: asset_name,
@@ -344,9 +424,24 @@ fn download_release_asset(
 
 
 #[tauri::command]
-fn cancel_download(control: State<'_, DownloadControl>) -> Result<(), String> {
-    control.cancelled.store(true, Ordering::SeqCst);
-    Ok(())
+fn cancel_download(
+    download_id: String,
+    control: State<'_, DownloadControl>,
+) -> Result<(), String> {
+    let active = control.active
+        .lock()
+        .map_err(|_| "Download control lock is unavailable.".to_string())?;
+
+    match active.as_ref() {
+        Some(item) if item.id == download_id && item.cancellable => {
+            item.cancelled.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+        Some(item) if item.id == download_id => {
+            Err("The download is already finishing and can no longer be cancelled.".into())
+        }
+        _ => Err("No matching active download was found.".into()),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -447,7 +542,7 @@ fn greet(name: &str) -> String {
 pub fn run() {
     tauri::Builder::default()
         .manage(DownloadControl {
-            cancelled: AtomicBool::new(false),
+            active: Mutex::new(None),
         })
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![

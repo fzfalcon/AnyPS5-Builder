@@ -16,6 +16,7 @@ type ReleaseAsset = {
 };
 
 type DownloadProgress = {
+  download_id: string;
   asset_name: string;
   received: number;
   total: number;
@@ -50,13 +51,16 @@ export default function App() {
   const [cancelRequested, setCancelRequested] = useState(false);
   const cancelRequestedRef = useRef(false);
   const activeDownloadRef = useRef(false);
+  const activeDownloadIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
     let disposed = false;
 
     listen<DownloadProgress>("download-progress", (event) => {
-      setDownloadProgress(event.payload);
+      if (event.payload.download_id === activeDownloadIdRef.current) {
+        setDownloadProgress(event.payload);
+      }
     }).then((stopListening) => {
       if (disposed) {
         stopListening();
@@ -123,9 +127,12 @@ export default function App() {
     if (!release || activeDownloadRef.current) return;
 
     activeDownloadRef.current = true;
+    const downloadId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    activeDownloadIdRef.current = downloadId;
     cancelRequestedRef.current = false;
     setCancelRequested(false);
     setDownloadProgress({
+      download_id: downloadId,
       asset_name: asset.name,
       received: 0,
       total: asset.size,
@@ -143,6 +150,7 @@ export default function App() {
         sha256: string;
         digest_verified: boolean;
       }>("download_release_asset", {
+        downloadId,
         assetName: asset.name,
         expectedVersion: release.version,
       });
@@ -180,6 +188,9 @@ export default function App() {
       }
     } finally {
       activeDownloadRef.current = false;
+      if (activeDownloadIdRef.current === downloadId) {
+        activeDownloadIdRef.current = null;
+      }
       cancelRequestedRef.current = false;
       setCancelRequested(false);
       setDownloading(null);
@@ -194,7 +205,11 @@ export default function App() {
     log("Cancellation requested…");
 
     try {
-      await invoke("cancel_download");
+      const downloadId = activeDownloadIdRef.current;
+      if (!downloadId) {
+        throw new Error("There is no active download to cancel.");
+      }
+      await invoke("cancel_download", { downloadId });
     } catch (err) {
       const message =
         typeof err === "string" ? err : "Could not request cancellation.";
